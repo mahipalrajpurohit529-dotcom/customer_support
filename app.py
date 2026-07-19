@@ -25,6 +25,11 @@ from schemas import IntentResponse, QueryRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("customer_support")
 
+
+from agents.database_agent import DatabaseAgentError, database_agent
+from schemas import CustomerRequest, CustomerResponse
+
+
 app = FastAPI(
     title="AI Customer Support System - Intent Detection Agent",
     description="Phase 1: classifies a customer query into a predefined intent.",
@@ -139,3 +144,26 @@ def detect_intent(payload: QueryRequest) -> IntentResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from exc
+
+
+
+
+
+@app.post("/customer", response_model=CustomerResponse, tags=["Database"])
+def get_customer(payload: CustomerRequest) -> CustomerResponse:
+    try:
+        customer = database_agent.get_customer(payload.customer_id)
+        if customer is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No customer found with customer_id={payload.customer_id}",
+            )
+        return CustomerResponse(**customer)
+    except DatabaseAgentError as exc:
+        logger.error("Database agent failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to retrieve customer data.") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error in /customer")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from exc

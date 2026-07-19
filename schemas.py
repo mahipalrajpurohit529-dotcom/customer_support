@@ -60,3 +60,20 @@ class IntentResponse(BaseModel):
     """Outgoing response body for POST /detect-intent."""
 
     intent: IntentLabel
+
+
+
+class CustomerRequest(BaseModel):
+    """Incoming request body for POST /customer."""
+    customer_id: int
+
+
+class CustomerResponse(BaseModel):
+    """Outgoing response body for POST /customer."""
+    customer_id: int
+    first_name: str
+    last_name: str
+    email: str
+    phone: str | None = None
+    address: str | None = None
+    created_at: str | None = None

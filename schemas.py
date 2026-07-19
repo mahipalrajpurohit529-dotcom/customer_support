@@ -106,3 +106,40 @@ class PolicyResponse(BaseModel):
     title: str
     content: str
     updated_at: str | None = None
+
+
+
+
+
+
+class ResponseGenerationRequest(BaseModel):
+    """Incoming request body for POST /generate-response."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="The original customer query.",
+        examples=["What is your refund policy?"],
+    )
+    intent: str = Field(
+        ...,
+        description="The intent detected for this query.",
+        examples=["refund_policy"],
+    )
+    retrieved_data: dict = Field(
+        ...,
+        description="The structured data retrieved from the Database Agent for this query.",
+        examples=[
+            {
+                "policy_type": "refund_policy",
+                "title": "Refund Policy",
+                "content": "We offer a full refund within 30 days of delivery...",
+            }
+        ],
+    )
+
+
+class ResponseGenerationResult(BaseModel):
+    """Outgoing response body for POST /generate-response."""
+
+    response: str

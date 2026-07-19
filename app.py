@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 
 from agents.database_agent import DatabaseAgentError, database_agent
 from agents.intent_agent import IntentAgentError, intent_agent
+from agents.response_agent import ResponseAgentError, response_agent
 from schemas import (
     CustomerRequest,
     CustomerResponse,
@@ -28,6 +29,8 @@ from schemas import (
     PolicyRequest,
     PolicyResponse,
     QueryRequest,
+    ResponseGenerationRequest,
+    ResponseGenerationResult,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -321,7 +324,37 @@ def test_page() -> str:
 
         </div>
 
-        <div class="footer">AI Customer Support System &middot; Phase 1 + Phase 2</div>
+        <div class="card" style="margin-top: 16px;">
+            <div class="card-head">
+                <span><span class="method">POST</span> /generate-response</span>
+                <span>response agent</span>
+            </div>
+            <div class="card-body">
+                <label for="genQueryInput">customer query</label>
+                <input id="genQueryInput" type="text" placeholder="What is your refund policy?" style="margin-bottom: 10px;" />
+
+                <label for="genIntentInput">intent</label>
+                <input id="genIntentInput" type="text" placeholder="refund_policy" style="margin-bottom: 10px;" />
+
+                <label for="genDataInput">retrieved_data (JSON)</label>
+                <textarea id="genDataInput" rows="3" placeholder='{"policy_type": "refund_policy", "title": "Refund Policy", "content": "..."}'
+                    style="width: 100%; background: #0d1015; border: 1px solid var(--border); color: var(--text);
+                           font-family: var(--font-mono); font-size: 13px; padding: 10px 12px; border-radius: 6px;
+                           outline: none; resize: vertical; margin-bottom: 4px;"></textarea>
+
+                <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                    <button id="genBtn" onclick="generateResponse()">run</button>
+                </div>
+
+                <div class="examples">
+                    <span class="chip" onclick="fillGenExample()">fill refund policy example</span>
+                </div>
+
+                <div id="genOutput" class="output">awaiting input&hellip;</div>
+            </div>
+        </div>
+
+        <div class="footer">AI Customer Support System &middot; Phase 1 + Phase 2 + Phase 3 + Phase 4</div>
     </div>
 
     <script>
@@ -455,6 +488,64 @@ def test_page() -> str:
         document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key === 'Enter') detectIntent(); });
         document.getElementById('customerInput').addEventListener('keydown', e => { if (e.key === 'Enter') lookupCustomer(); });
         document.getElementById('policyInput').addEventListener('keydown', e => { if (e.key === 'Enter') lookupPolicy(); });
+
+        function fillGenExample() {
+            document.getElementById('genQueryInput').value = 'What is your refund policy?';
+            document.getElementById('genIntentInput').value = 'refund_policy';
+            document.getElementById('genDataInput').value = JSON.stringify({
+                policy_type: 'refund_policy',
+                title: 'Refund Policy',
+                content: 'We offer a full refund within 30 days of delivery for items in their original condition.'
+            }, null, 2);
+        }
+
+        async function generateResponse() {
+            const query = document.getElementById('genQueryInput').value.trim();
+            const intent = document.getElementById('genIntentInput').value.trim();
+            const dataRaw = document.getElementById('genDataInput').value.trim();
+            const out = document.getElementById('genOutput');
+            const btn = document.getElementById('genBtn');
+
+            if (!query || !intent || !dataRaw) {
+                out.className = 'output err';
+                out.textContent = 'error: query, intent, and retrieved_data are all required';
+                return;
+            }
+
+            let retrieved_data;
+            try {
+                retrieved_data = JSON.parse(dataRaw);
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: retrieved_data must be valid JSON';
+                return;
+            }
+
+            btn.disabled = true;
+            out.className = 'output';
+            out.innerHTML = 'running<span class="cursor"></span>';
+
+            try {
+                const res = await fetch('/generate-response', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, intent, retrieved_data })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    out.className = 'output err';
+                    out.textContent = 'error: ' + (data.detail || 'request failed');
+                } else {
+                    out.className = 'output ok';
+                    out.textContent = data.response;
+                }
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
     </script>
     </body>
     </html>
@@ -590,6 +681,55 @@ def get_policy(payload: PolicyRequest) -> PolicyResponse:
 
     except Exception as exc:  # noqa: BLE001 - final safety net
         logger.exception("Unexpected error in /policy")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Response Generator Agent testing endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/generate-response",
+    response_model=ResponseGenerationResult,
+    tags=["Response Generation"],
+)
+def generate_response(payload: ResponseGenerationRequest) -> ResponseGenerationResult:
+    """
+    Generate a customer-facing reply from a query, intent, and
+    previously retrieved data. Exists to test the Response Agent in
+    isolation, before it's wired into the full pipeline (Phase 5).
+
+    Request body:
+        {
+          "query": "What is your refund policy?",
+          "intent": "refund_policy",
+          "retrieved_data": {"policy_type": "refund_policy", "title": "Refund Policy", "content": "..."}
+        }
+
+    Response body:
+        { "response": "Thanks for reaching out! We offer a full refund within 30 days..." }
+    """
+    try:
+        reply = response_agent.generate_response(
+            query=payload.query,
+            intent=payload.intent,
+            retrieved_data=payload.retrieved_data,
+        )
+        return ResponseGenerationResult(response=reply)
+
+    except ResponseAgentError as exc:
+        logger.error("Response agent failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate a response. Please try again.",
+        ) from exc
+
+    except Exception as exc:  # noqa: BLE001 - final safety net
+        logger.exception("Unexpected error in /generate-response")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",

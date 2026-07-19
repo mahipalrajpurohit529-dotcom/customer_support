@@ -90,6 +90,27 @@ def validate_customer_tool(customer_id: int) -> str:
         return json.dumps({"error": str(exc)})
 
 
+
+
+@tool
+def get_policy_tool(policy_type: str) -> str:
+    """
+    Look up the full text of a company policy. policy_type must be
+    one of: "refund_policy", "return_policy", "cancellation_policy",
+    "shipping_policy". Returns a JSON object with the policy's title
+    and content, or a JSON object with an "error" key if the policy
+    type is not found.
+    """
+    try:
+        policy = database_agent.get_policy(policy_type)
+        if policy is None:
+            return json.dumps({"error": f"No policy found with policy_type={policy_type}"})
+        return json.dumps(policy)
+    except DatabaseAgentError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+
 # Convenience list for wiring all database tools into an agent/chain at once.
 database_tools = [
     get_customer_tool,
@@ -97,4 +118,5 @@ database_tools = [
     get_orders_tool,
     get_order_tool,
     validate_customer_tool,
+    get_policy_tool
 ]

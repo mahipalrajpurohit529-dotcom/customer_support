@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from database.models import Customer, Order
+from database.models import Customer, Order , Policy
 
 
 def get_customer(db: Session, customer_id: int) -> Optional[Customer]:
@@ -39,3 +39,8 @@ def validate_customer(db: Session, customer_id: int) -> bool:
         .first()
         is not None
     )
+
+
+def get_policy(db: Session, policy_type: str) -> Optional[Policy]:
+    """Fetch a single policy by its policy_type key (e.g. 'refund_policy')."""
+    return db.query(Policy).filter(Policy.policy_type == policy_type).first()

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text
 )
 from sqlalchemy.orm import relationship
 
@@ -45,3 +46,13 @@ class Order(Base):
     order_date = Column(DateTime, nullable=True)
 
     customer = relationship("Customer", back_populates="orders")
+
+
+class Policy(Base):
+    __tablename__ = "policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_type = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(150), nullable=False)
+    content = Column(Text, nullable=False)
+    updated_at = Column(DateTime, nullable=True)

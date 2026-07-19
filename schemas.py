@@ -62,14 +62,24 @@ class IntentResponse(BaseModel):
     intent: IntentLabel
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 schemas (Database Agent testing endpoint)
+# ---------------------------------------------------------------------------
+
 
 class CustomerRequest(BaseModel):
     """Incoming request body for POST /customer."""
-    customer_id: int
+
+    customer_id: int = Field(
+        ...,
+        description="The numeric ID of the customer to look up.",
+        examples=[101],
+    )
 
 
 class CustomerResponse(BaseModel):
     """Outgoing response body for POST /customer."""
+
     customer_id: int
     first_name: str
     last_name: str
@@ -77,3 +87,22 @@ class CustomerResponse(BaseModel):
     phone: str | None = None
     address: str | None = None
     created_at: str | None = None
+
+
+class PolicyRequest(BaseModel):
+    """Incoming request body for POST /policy."""
+
+    policy_type: str = Field(
+        ...,
+        description="One of: refund_policy, return_policy, cancellation_policy, shipping_policy.",
+        examples=["refund_policy"],
+    )
+
+
+class PolicyResponse(BaseModel):
+    """Outgoing response body for POST /policy."""
+
+    policy_type: str
+    title: str
+    content: str
+    updated_at: str | None = None

@@ -21,7 +21,14 @@ from fastapi.responses import HTMLResponse
 
 from agents.database_agent import DatabaseAgentError, database_agent
 from agents.intent_agent import IntentAgentError, intent_agent
-from schemas import CustomerRequest, CustomerResponse, IntentResponse, QueryRequest
+from schemas import (
+    CustomerRequest,
+    CustomerResponse,
+    IntentResponse,
+    PolicyRequest,
+    PolicyResponse,
+    QueryRequest,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("customer_support")
@@ -115,11 +122,14 @@ def test_page() -> str:
 
         .grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 16px;
             margin-top: 16px;
         }
-        @media (max-width: 720px) {
+        @media (max-width: 980px) {
+            .grid { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 640px) {
             .grid { grid-template-columns: 1fr; }
         }
 
@@ -270,6 +280,27 @@ def test_page() -> str:
 
             <div class="card">
                 <div class="card-head">
+                    <span><span class="method">POST</span> /policy</span>
+                    <span>database agent</span>
+                </div>
+                <div class="card-body">
+                    <label for="policyInput">policy_type</label>
+                    <div class="input-row">
+                        <input id="policyInput" type="text" placeholder="refund_policy" />
+                        <button id="policyBtn" onclick="lookupPolicy()">run</button>
+                    </div>
+                    <div class="examples">
+                        <span class="chip" onclick="fillPolicy('refund_policy')">refund</span>
+                        <span class="chip" onclick="fillPolicy('return_policy')">return</span>
+                        <span class="chip" onclick="fillPolicy('cancellation_policy')">cancellation</span>
+                        <span class="chip" onclick="fillPolicy('shipping_policy')">shipping</span>
+                    </div>
+                    <div id="policyOutput" class="output">awaiting input&hellip;</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head">
                     <span><span class="method">POST</span> /customer</span>
                     <span>database agent</span>
                 </div>
@@ -319,6 +350,10 @@ def test_page() -> str:
         function fillCustomer(id) {
             document.getElementById('customerInput').value = id;
             lookupCustomer();
+        }
+        function fillPolicy(type) {
+            document.getElementById('policyInput').value = type;
+            lookupPolicy();
         }
 
         async function detectIntent() {
@@ -385,8 +420,41 @@ def test_page() -> str:
             }
         }
 
+        async function lookupPolicy() {
+            const policyType = document.getElementById('policyInput').value.trim();
+            const out = document.getElementById('policyOutput');
+            const btn = document.getElementById('policyBtn');
+            if (!policyType) { out.className = 'output err'; out.textContent = 'error: policy_type cannot be empty'; return; }
+
+            btn.disabled = true;
+            out.className = 'output';
+            out.innerHTML = 'running<span class="cursor"></span>';
+
+            try {
+                const res = await fetch('/policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policy_type: policyType })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    out.className = 'output err';
+                    out.textContent = 'error: ' + (data.detail || 'request failed');
+                } else {
+                    out.className = 'output ok';
+                    out.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key === 'Enter') detectIntent(); });
         document.getElementById('customerInput').addEventListener('keydown', e => { if (e.key === 'Enter') lookupCustomer(); });
+        document.getElementById('policyInput').addEventListener('keydown', e => { if (e.key === 'Enter') lookupPolicy(); });
     </script>
     </body>
     </html>
@@ -468,3 +536,61 @@ def get_customer(payload: CustomerRequest) -> CustomerResponse:
 
     except HTTPException:
         raise
+
+    except Exception as exc:  # noqa: BLE001 - final safety net
+        logger.exception("Unexpected error in /customer")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Policies data layer testing endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/policy",
+    response_model=PolicyResponse,
+    tags=["Database"],
+)
+def get_policy(payload: PolicyRequest) -> PolicyResponse:
+    """
+    Look up a company policy by policy_type. Exists purely to
+    exercise the Database Agent's policy lookup independently of the
+    intent/LLM layer.
+
+    Request body:
+        { "policy_type": "refund_policy" }
+
+    Response body:
+        { "policy_type": "refund_policy", "title": "Refund Policy", "content": "...", "updated_at": null }
+    """
+    try:
+        policy = database_agent.get_policy(payload.policy_type)
+
+        if policy is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No policy found with policy_type={payload.policy_type}",
+            )
+
+        return PolicyResponse(**policy)
+
+    except DatabaseAgentError as exc:
+        logger.error("Database agent failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to retrieve policy data. Please try again.",
+        ) from exc
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:  # noqa: BLE001 - final safety net
+        logger.exception("Unexpected error in /policy")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from exc

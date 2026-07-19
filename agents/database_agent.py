@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database import crud
 from database.connection import get_db_session
-from database.models import Customer, Order
+from database.models import Customer, Order ,Policy 
 
 
 class DatabaseAgentError(Exception):
@@ -43,6 +43,16 @@ def _order_to_dict(order: Order) -> dict:
         "order_status": order.order_status,
         "tracking_number": order.tracking_number,
         "order_date": order.order_date.isoformat() if order.order_date else None,
+    }
+
+
+
+def _policy_to_dict(policy: Policy) -> dict:
+    return {
+        "policy_type": policy.policy_type,
+        "title": policy.title,
+        "content": policy.content,
+        "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
     }
 
 
@@ -91,6 +101,15 @@ class DatabaseAgent:
                 return crud.validate_customer(db, customer_id)
         except SQLAlchemyError as exc:
             raise DatabaseAgentError(f"Failed to validate customer {customer_id}: {exc}") from exc
+
+    def get_policy(self, policy_type: str) -> Optional[dict]:
+        try:
+            with get_db_session() as db:
+                policy = crud.get_policy(db, policy_type)
+                return _policy_to_dict(policy) if policy else None
+        except SQLAlchemyError as exc:
+            raise DatabaseAgentError(f"Failed to fetch policy {policy_type}: {exc}") from exc
+
 
 
 # Singleton instance reused across the app, mirroring the intent_agent pattern.

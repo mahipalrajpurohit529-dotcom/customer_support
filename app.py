@@ -19,16 +19,12 @@ import logging
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 
+from agents.database_agent import DatabaseAgentError, database_agent
 from agents.intent_agent import IntentAgentError, intent_agent
-from schemas import IntentResponse, QueryRequest
+from schemas import CustomerRequest, CustomerResponse, IntentResponse, QueryRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("customer_support")
-
-
-from agents.database_agent import DatabaseAgentError, database_agent
-from schemas import CustomerRequest, CustomerResponse
-
 
 app = FastAPI(
     title="AI Customer Support System - Intent Detection Agent",
@@ -46,67 +42,352 @@ def health_check() -> dict:
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def test_page() -> str:
     """
-    A minimal, dependency-free HTML page for manually testing the
-    /detect-intent endpoint without needing Swagger UI or curl.
+    A self-contained console for manually testing /detect-intent and
+    /customer without needing Swagger UI or curl.
     """
     return """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>Intent Detection - Test</title>
-        <style>
-            body { font-family: sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
-            h2 { margin-bottom: 4px; }
-            p.sub { color: #666; margin-top: 0; }
-            input { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
-            button { margin-top: 10px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
-            #result { margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 6px;
-                       font-size: 18px; display: none; }
-            #result.error { background: #fdecea; color: #b00020; }
-        </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>customer_support :: agent console</title>
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --panel: #12151b;
+            --border: #232a35;
+            --text: #d7dee8;
+            --text-dim: #6b7688;
+            --cyan: #4fd6c4;
+            --amber: #e8a33d;
+            --red: #e5484d;
+            --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-mono);
+            margin: 0;
+            padding: 40px 20px 80px;
+            min-height: 100vh;
+        }
+        .wrap { max-width: 880px; margin: 0 auto; }
+
+        .titlebar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            border: 1px solid var(--border);
+            border-radius: 8px 8px 0 0;
+            background: linear-gradient(180deg, #161a22, #12151b);
+        }
+        .dots { display: flex; gap: 7px; }
+        .dot { width: 11px; height: 11px; border-radius: 50%; }
+        .dot.red { background: #3a2226; border: 1px solid var(--red); }
+        .dot.amber { background: #3a2f1c; border: 1px solid var(--amber); }
+        .dot.green { background: #1c3a30; border: 1px solid var(--cyan); }
+        .path { color: var(--text-dim); font-size: 13px; letter-spacing: 0.02em; }
+
+        .status {
+            display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim);
+        }
+        .status .led { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+        .status .led.up { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+        .status .led.down { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+        .hero {
+            border: 1px solid var(--border);
+            border-top: none;
+            padding: 22px;
+            background: var(--panel);
+        }
+        .hero h1 {
+            margin: 0 0 4px;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .hero h1 .prompt { color: var(--cyan); }
+        .hero p { margin: 0; color: var(--text-dim); font-size: 13px; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 16px;
+        }
+        @media (max-width: 720px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            overflow: hidden;
+        }
+        .card-head {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .card-head .method {
+            color: var(--cyan);
+            font-weight: 600;
+        }
+        .card-body { padding: 16px; }
+
+        label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .input-row { display: flex; gap: 8px; margin-bottom: 4px; }
+        input[type="text"], input[type="number"] {
+            flex: 1;
+            background: #0d1015;
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            outline: none;
+        }
+        input:focus {
+            border-color: var(--cyan);
+        }
+        input::placeholder { color: #3d4451; }
+
+        button {
+            background: #16211f;
+            border: 1px solid var(--cyan);
+            color: var(--cyan);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        button:hover { background: #1c2d2a; }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: default; }
+
+        .output {
+            margin-top: 12px;
+            background: #0d1015;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 12.5px;
+            min-height: 42px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-dim);
+        }
+        .output.ok { color: var(--cyan); border-color: #1c3a30; }
+        .output.err { color: var(--red); border-color: #3a2226; }
+        .output .cursor {
+            display: inline-block;
+            width: 7px; height: 13px;
+            background: var(--cyan);
+            margin-left: 2px;
+            animation: blink 1s step-start infinite;
+            vertical-align: text-bottom;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .examples { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .chip {
+            font-size: 11px;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            padding: 4px 9px;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+        .chip:hover { border-color: var(--cyan); color: var(--cyan); }
+
+        .footer {
+            margin-top: 18px;
+            text-align: center;
+            font-size: 11px;
+            color: #3d4451;
+        }
+    </style>
     </head>
     <body>
-        <h2>Intent Detection Agent</h2>
-        <p class="sub">Type a customer query and see which intent it's classified as.</p>
+    <div class="wrap">
 
-        <input id="queryInput" type="text" placeholder="e.g. Where is my order?" />
-        <button onclick="detectIntent()">Detect Intent</button>
+        <div class="titlebar">
+            <div class="dots">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+            </div>
+            <span class="path">~/customer_support</span>
+            <span class="status"><span id="healthLed" class="led"></span><span id="healthText">checking</span></span>
+        </div>
 
-        <div id="result"></div>
+        <div class="hero">
+            <h1><span class="prompt">$</span> agent-console</h1>
+            <p>Send a query straight to the Intent Agent, or pull a customer record straight from the Database Agent.</p>
+        </div>
 
-        <script>
-            async function detectIntent() {
-                const query = document.getElementById('queryInput').value;
-                const resultBox = document.getElementById('result');
-                resultBox.style.display = 'block';
-                resultBox.className = '';
-                resultBox.textContent = 'Detecting...';
+        <div class="grid">
 
-                try {
-                    const response = await fetch('/detect-intent', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: query })
-                    });
-                    const data = await response.json();
+            <div class="card">
+                <div class="card-head">
+                    <span><span class="method">POST</span> /detect-intent</span>
+                    <span>intent agent</span>
+                </div>
+                <div class="card-body">
+                    <label for="queryInput">customer query</label>
+                    <div class="input-row">
+                        <input id="queryInput" type="text" placeholder="Where is my order?" />
+                        <button id="intentBtn" onclick="detectIntent()">run</button>
+                    </div>
+                    <div class="examples">
+                        <span class="chip" onclick="fillQuery('What is your refund policy?')">refund policy</span>
+                        <span class="chip" onclick="fillQuery('Cancel my order')">cancellation</span>
+                        <span class="chip" onclick="fillQuery('Hi there')">greeting</span>
+                    </div>
+                    <div id="intentOutput" class="output">awaiting input&hellip;</div>
+                </div>
+            </div>
 
-                    if (!response.ok) {
-                        resultBox.className = 'error';
-                        resultBox.textContent = 'Error: ' + (data.detail || 'Something went wrong');
-                        return;
-                    }
+            <div class="card">
+                <div class="card-head">
+                    <span><span class="method">POST</span> /customer</span>
+                    <span>database agent</span>
+                </div>
+                <div class="card-body">
+                    <label for="customerInput">customer_id</label>
+                    <div class="input-row">
+                        <input id="customerInput" type="number" placeholder="101" />
+                        <button id="customerBtn" onclick="lookupCustomer()">run</button>
+                    </div>
+                    <div class="examples">
+                        <span class="chip" onclick="fillCustomer(101)">101</span>
+                        <span class="chip" onclick="fillCustomer(115)">115</span>
+                        <span class="chip" onclick="fillCustomer(999)">999 (missing)</span>
+                    </div>
+                    <div id="customerOutput" class="output">awaiting input&hellip;</div>
+                </div>
+            </div>
 
-                    resultBox.textContent = 'Intent: ' + data.intent;
-                } catch (err) {
-                    resultBox.className = 'error';
-                    resultBox.textContent = 'Error: ' + err.message;
+        </div>
+
+        <div class="footer">AI Customer Support System &middot; Phase 1 + Phase 2</div>
+    </div>
+
+    <script>
+        async function checkHealth() {
+            const led = document.getElementById('healthLed');
+            const text = document.getElementById('healthText');
+            try {
+                const res = await fetch('/health');
+                if (res.ok) {
+                    led.className = 'led up';
+                    text.textContent = 'online';
+                } else {
+                    throw new Error();
                 }
+            } catch {
+                led.className = 'led down';
+                text.textContent = 'offline';
             }
+        }
+        checkHealth();
 
-            document.getElementById('queryInput').addEventListener('keydown', function(e) {
-                if (e.key === 'Enter') detectIntent();
-            });
-        </script>
+        function fillQuery(text) {
+            document.getElementById('queryInput').value = text;
+            detectIntent();
+        }
+        function fillCustomer(id) {
+            document.getElementById('customerInput').value = id;
+            lookupCustomer();
+        }
+
+        async function detectIntent() {
+            const query = document.getElementById('queryInput').value.trim();
+            const out = document.getElementById('intentOutput');
+            const btn = document.getElementById('intentBtn');
+            if (!query) { out.className = 'output err'; out.textContent = 'error: query cannot be empty'; return; }
+
+            btn.disabled = true;
+            out.className = 'output';
+            out.innerHTML = 'running<span class="cursor"></span>';
+
+            try {
+                const res = await fetch('/detect-intent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    out.className = 'output err';
+                    out.textContent = 'error: ' + (data.detail || 'request failed');
+                } else {
+                    out.className = 'output ok';
+                    out.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function lookupCustomer() {
+            const idVal = document.getElementById('customerInput').value.trim();
+            const out = document.getElementById('customerOutput');
+            const btn = document.getElementById('customerBtn');
+            if (!idVal) { out.className = 'output err'; out.textContent = 'error: customer_id cannot be empty'; return; }
+
+            btn.disabled = true;
+            out.className = 'output';
+            out.innerHTML = 'running<span class="cursor"></span>';
+
+            try {
+                const res = await fetch('/customer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ customer_id: parseInt(idVal, 10) })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    out.className = 'output err';
+                    out.textContent = 'error: ' + (data.detail || 'request failed');
+                } else {
+                    out.className = 'output ok';
+                    out.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key === 'Enter') detectIntent(); });
+        document.getElementById('customerInput').addEventListener('keydown', e => { if (e.key === 'Enter') lookupCustomer(); });
+    </script>
     </body>
     </html>
     """
@@ -146,24 +427,44 @@ def detect_intent(payload: QueryRequest) -> IntentResponse:
         ) from exc
 
 
+# ---------------------------------------------------------------------------
+# Phase 2: Database Agent testing endpoint
+# ---------------------------------------------------------------------------
 
 
-
-@app.post("/customer", response_model=CustomerResponse, tags=["Database"])
+@app.post(
+    "/customer",
+    response_model=CustomerResponse,
+    tags=["Database"],
+)
 def get_customer(payload: CustomerRequest) -> CustomerResponse:
+    """
+    Look up a customer by customer_id. Exists purely to exercise the
+    Database Agent independently of the intent/LLM layer.
+
+    Request body:
+        { "customer_id": 101 }
+
+    Response body:
+        { "customer_id": 101, "first_name": "John", "last_name": "Doe", "email": "john@gmail.com" }
+    """
     try:
         customer = database_agent.get_customer(payload.customer_id)
+
         if customer is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No customer found with customer_id={payload.customer_id}",
             )
+
         return CustomerResponse(**customer)
+
     except DatabaseAgentError as exc:
         logger.error("Database agent failed: %s", exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to retrieve customer data.") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to retrieve customer data. Please try again.",
+        ) from exc
+
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error in /customer")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from exc

@@ -54,6 +54,14 @@ class IntentResult(BaseModel):
         ...,
         description="The single best-matching intent for the customer query.",
     )
+    order_id: int | None = Field(
+        default=None,
+        description=(
+            "A numeric order ID extracted from the customer's message, if one "
+            "is present (e.g. 'order 1002', '#1002'). Null if no order ID is "
+            "mentioned."
+        ),
+    )
 
 
 class IntentResponse(BaseModel):
@@ -143,3 +151,28 @@ class ResponseGenerationResult(BaseModel):
     """Outgoing response body for POST /generate-response."""
 
     response: str
+
+
+
+
+
+
+class SupportQueryRequest(BaseModel):
+    """Incoming request body for POST /support/query."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="The raw customer query, run through the full pipeline.",
+        examples=["What's the status of my order 1002?"],
+    )
+
+
+class SupportQueryResponse(BaseModel):
+    """Outgoing response body for POST /support/query."""
+
+    query: str
+    detected_intent: str
+    order_id: int | None = None
+    retrieved_data: dict
+    final_response: str

@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse
 from agents.database_agent import DatabaseAgentError, database_agent
 from agents.intent_agent import IntentAgentError, intent_agent
 from agents.response_agent import ResponseAgentError, response_agent
+from orchestrator import OrchestratorError, run_support_pipeline
 from schemas import (
     CustomerRequest,
     CustomerResponse,
@@ -31,6 +32,8 @@ from schemas import (
     QueryRequest,
     ResponseGenerationRequest,
     ResponseGenerationResult,
+    SupportQueryRequest,
+    SupportQueryResponse,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -259,6 +262,30 @@ def test_page() -> str:
             <p>Send a query straight to the Intent Agent, or pull a customer record straight from the Database Agent.</p>
         </div>
 
+        <div class="card" style="margin-top: 16px; border-color: #1c3a30;">
+            <div class="card-head" style="background: #101815;">
+                <span><span class="method">POST</span> /support/query</span>
+                <span>full pipeline</span>
+            </div>
+            <div class="card-body">
+                <label for="pipelineInput">customer query</label>
+                <div class="input-row">
+                    <input id="pipelineInput" type="text" placeholder="What's the status of my order 1002?" />
+                    <button id="pipelineBtn" onclick="runPipeline()">run</button>
+                </div>
+                <div class="examples">
+                    <span class="chip" onclick="fillPipeline('What is your refund policy?')">refund policy</span>
+                    <span class="chip" onclick="fillPipeline('Whats the status of my order 1002?')">order status</span>
+                    <span class="chip" onclick="fillPipeline('Cancel my order please')">cancellation</span>
+                    <span class="chip" onclick="fillPipeline('Hey there!')">greeting</span>
+                    <span class="chip" onclick="fillPipeline('Who is the CEO of Microsoft?')">off-topic</span>
+                </div>
+                <div id="pipelineOutput" class="output">awaiting input&hellip;</div>
+            </div>
+        </div>
+
+        <div class="footer" style="margin-top: 24px; margin-bottom: 4px;">individual agent testing (debug)</div>
+
         <div class="grid">
 
             <div class="card">
@@ -375,6 +402,49 @@ def test_page() -> str:
             }
         }
         checkHealth();
+
+        function fillPipeline(text) {
+            document.getElementById('pipelineInput').value = text;
+            runPipeline();
+        }
+
+        async function runPipeline() {
+            const query = document.getElementById('pipelineInput').value.trim();
+            const out = document.getElementById('pipelineOutput');
+            const btn = document.getElementById('pipelineBtn');
+            if (!query) { out.className = 'output err'; out.textContent = 'error: query cannot be empty'; return; }
+
+            btn.disabled = true;
+            out.className = 'output';
+            out.innerHTML = 'running full pipeline<span class="cursor"></span>';
+
+            try {
+                const res = await fetch('/support/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    out.className = 'output err';
+                    out.textContent = 'error: ' + (data.detail || 'request failed');
+                } else {
+                    out.className = 'output ok';
+                    out.textContent =
+                        data.final_response +
+                        '\\n\\n---\\nintent: ' + data.detected_intent +
+                        (data.order_id ? '\\norder_id: ' + data.order_id : '') +
+                        '\\nretrieved_data: ' + JSON.stringify(data.retrieved_data);
+                }
+            } catch (err) {
+                out.className = 'output err';
+                out.textContent = 'error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('pipelineInput').addEventListener('keydown', e => { if (e.key === 'Enter') runPipeline(); });
 
         function fillQuery(text) {
             document.getElementById('queryInput').value = text;
@@ -730,6 +800,55 @@ def generate_response(payload: ResponseGenerationRequest) -> ResponseGenerationR
 
     except Exception as exc:  # noqa: BLE001 - final safety net
         logger.exception("Unexpected error in /generate-response")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Full pipeline endpoint (Intent -> Database -> Response)
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/support/query",
+    response_model=SupportQueryResponse,
+    tags=["Support Pipeline"],
+)
+def support_query(payload: SupportQueryRequest) -> SupportQueryResponse:
+    """
+    The real product endpoint. Takes a raw customer query, runs it
+    through the Intent Agent, the Database Agent (whichever lookup
+    matches the detected intent), and the Response Agent, and returns
+    the final natural-language reply along with the intermediate data
+    used to produce it.
+
+    Request body:
+        { "query": "What's the status of my order 1002?" }
+
+    Response body:
+        {
+          "query": "What's the status of my order 1002?",
+          "detected_intent": "order_status",
+          "order_id": 1002,
+          "retrieved_data": { ... },
+          "final_response": "Your order is currently..."
+        }
+    """
+    try:
+        result = run_support_pipeline(payload.query)
+        return SupportQueryResponse(**result)
+
+    except OrchestratorError as exc:
+        logger.error("Support pipeline failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to process the query. Please try again.",
+        ) from exc
+
+    except Exception as exc:  # noqa: BLE001 - final safety net
+        logger.exception("Unexpected error in /support/query")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",

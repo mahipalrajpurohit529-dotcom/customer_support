@@ -35,6 +35,10 @@ Rules:
 1. Always choose exactly one intent from the list above.
 2. If the message is ambiguous or unrelated to customer support, choose "unknown".
 3. Base your decision only on the customer's message below.
+4. If the message contains a numeric order ID (e.g. "order 1002", "#1002",
+   "order id 1002", "my order number is 1002"), extract it as an integer in
+   the order_id field. If no order ID is mentioned, leave order_id as null.
+   Do not guess an order ID that isn't explicitly present in the message.
 """
 
 intent_prompt_template = ChatPromptTemplate.from_messages(
